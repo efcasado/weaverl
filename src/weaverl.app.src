@@ -1,0 +1,6 @@
+{application, weaverl,
+ [
+  {description, "AOP library for Erlang"},
+  {vsn,         "0.1"}
+ ]}.
+ 
