@@ -102,7 +102,7 @@ process_forms(Forms0, State0) ->
 handle_call({{M, F, A}, Args}, State) ->
     case get_applicable_advices({M, F, A}, State) of
         []           -> {{fun2abs({M, F}, State), Args}, State};
-        [Advice| _]  -> apply_advice(Advice, M, F, Args, State)
+        [Advice| _]  -> apply_advice(Advice, {M, F, Args}, State)
     end.
 
 get_applicable_advices(Fun, #state{advices = AllAdvices, context = Context}) ->
@@ -156,29 +156,19 @@ forms_to_list(#weaverl_forms{files = Fs, module = M, exports = Es, imports = Is,
 %% TBD
 %% @end
 %%------------------------------------------------------------------------------
-apply_advice({before, {TM, TF}}, M, F, A, State) ->
-    {{fun2abs({M, F}, State), [{call, 0, fun2abs({TM, TF}, State), A}]}, State};
-apply_advice({'after', {TM, TF}}, M, F, A, State) ->
-    {{fun2abs({TM, TF}, State), [{call, 0, fun2abs({M, F}, State), A}]}, State};
-apply_advice({around, {TM, TF}}, M, F, A, State0) ->
-    %% Is the target function exported? If so, the proxy function
-    %% must be exported, as well.
-    case is_exported_fun({TF, length(A)}, State0) of
+apply_advice({before, {PM, PF}}, {M, F, A}, State) ->
+    {{fun2abs({M, F}, State), [{call, 0, fun2abs({PM, PF}, State), A}]}, State};
+apply_advice({'after', {PM, PF}}, {M, F, A}, State) ->
+    {{fun2abs({PM, PF}, State), [{call, 0, fun2abs({M, F}, State), A}]}, State};
+apply_advice({around, {PM, PF}}, {M, F, A}, State0) ->
+    case is_exported_fun({PF, length(A)}, State0) of
         true ->
-            %% Is the proxy function already exported? If so, there is
-            %% no need to export it again.
-            case is_exported_fun({F, length(A)}, State0) of
-                true ->
-                    {{fun2abs({TM, TF}, State0), 
-                      [{atom, 0, M}, {atom, 0, F}, args2abs(A)]}, State0};
-                false ->
-                    State = export_fun({F, length(A)}, State0),
-                    {{fun2abs({TM, TF}, State), 
-                      [{atom, 0, M}, {atom, 0, F}, args2abs(A)]}, State}
-            end;
+            {{fun2abs({PM, PF}, State0), 
+              [{atom, 0, M}, {atom, 0, F}, args2abs(A)]}, State0};
         false ->
-            {{fun2abs({TM, TF}, State0), 
-              [{atom, 0, M}, {atom, 0, F}, args2abs(A)]}, State0}
+            State = export_fun({F, length(A)}, State0),
+            {{fun2abs({PM, PF}, State0), 
+              [{atom, 0, M}, {atom, 0, F}, args2abs(A)]}, State}
     end.
 
 
