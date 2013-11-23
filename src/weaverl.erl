@@ -99,11 +99,20 @@ process_forms(Forms0, State0) ->
     forms_to_list(Forms).
 
 %% This function is called every time a function call (local or remote) is found.
-handle_call({{M, F, A}, Args}, State) ->
+handle_call({call, Line, F0, Args0}, State) ->
+    {M, F, A} = abs2fun(F0, Args0, State),
     case get_applicable_advices({M, F, A}, State) of
-        []           -> {{fun2abs({M, F}, State), Args}, State};
-        [Advice| _]  -> apply_advice(Advice, {M, F, Args}, State)
+        []           -> {{call, Line, F0, Args0}, State};
+        [Advice| _]  -> 
+            {{F, Args}, State} = apply_advice(Advice, {M, F}, Args0, State),
+            {{call, Line, F, Args}, State}
     end.
+
+%% handle_call({{M, F, A}, Args}, Line, State) ->
+%%     case get_applicable_advices({M, F, A}, State) of
+%%         []           -> {{fun2abs({M, F}, State), Args}, State};
+%%         [Advice| _]  -> apply_advice(Advice, {M, F, Args}, State)
+%%     end.
 
 get_applicable_advices(Fun, #state{advices = AllAdvices, context = Context}) ->
     lists:foldl(
@@ -156,19 +165,19 @@ forms_to_list(#weaverl_forms{files = Fs, module = M, exports = Es, imports = Is,
 %% TBD
 %% @end
 %%------------------------------------------------------------------------------
-apply_advice({before, {PM, PF}}, {M, F, A}, State) ->
-    {{fun2abs({M, F}, State), [{call, 0, fun2abs({PM, PF}, State), A}]}, State};
-apply_advice({'after', {PM, PF}}, {M, F, A}, State) ->
-    {{fun2abs({PM, PF}, State), [{call, 0, fun2abs({M, F}, State), A}]}, State};
-apply_advice({around, {PM, PF}}, {M, F, A}, State0) ->
-    case is_exported_fun({PF, length(A)}, State0) of
+apply_advice({before, {PM, PF}}, {M, F, _A}, Args, State) ->
+    {{fun2abs({M, F}, State), [{call, 0, fun2abs({PM, PF}, State), Args}]}, State};
+apply_advice({'after', {PM, PF}}, {M, F, _A}, Args, State) ->
+    {{fun2abs({PM, PF}, State), [{call, 0, fun2abs({M, F}, State), Args}]}, State};
+apply_advice({around, {PM, PF}}, {M, F, A}, Args, State0) ->
+    case is_exported_fun({PF, A}, State0) of
         true ->
             {{fun2abs({PM, PF}, State0), 
-              [{atom, 0, M}, {atom, 0, F}, args2abs(A)]}, State0};
+              [{atom, 0, M}, {atom, 0, F}, args2abs(Args)]}, State0};
         false ->
-            State = export_fun({F, length(A)}, State0),
+            State = export_fun({F, A}, State0),
             {{fun2abs({PM, PF}, State0), 
-              [{atom, 0, M}, {atom, 0, F}, args2abs(A)]}, State}
+              [{atom, 0, M}, {atom, 0, F}, args2abs(Args)]}, State}
     end.
 
 
@@ -227,12 +236,12 @@ export_fun(Fun, State) -> add_export_attr({attribute, 0, export, [Fun]}, State).
 %% Converts a function call in abstract form to its {M, F, A} format.
 %% end
 %%------------------------------------------------------------------------------
-abs2fun({{remote, _, {atom, _, M}, {atom, _, F}}, Args}, _State) ->
-    {{M, F, length(Args)}, Args};
-abs2fun({{atom, _, F}, Args}, State = #state{context = {M1, _, _}}) ->
+abs2fun({remote, _, {atom, _, M}, {atom, _, F}}, Args, _State) ->
+    {M, F, length(Args)};
+abs2fun({atom, _, F}, Args, State = #state{context = {M1, _, _}}) ->
     case is_imported_fun({F, length(Args)}, State) of
-        {true, M2} -> {{M2, F, length(Args)}, Args};
-        false      -> {{M1, F, length(Args)}, Args}
+        {true, M2} -> {M2, F, length(Args)};
+        false      -> {M1, F, length(Args)}
     end.
 
 %%------------------------------------------------------------------------------
@@ -573,8 +582,9 @@ process_expression({call, Line, F0, As0}, State0) ->
           end,
           {[], State1},
           As0),
-    {{F, As}, State3} = handle_call(abs2fun({F1, As1}, State2), State2),
-    {{call, Line, F, As}, State3};
+%%    {{F, As}, State3} = handle_call(abs2fun({F1, As1}, Line, State2), State2),
+    handle_call({call, Line, F1, As1}, State2);
+%%    {{call, Line, F, As}, State3};
 process_expression({'catch', Line, E0}, State0) -> 
     {E, State1} = process_expression(E0, State0),
     {{'catch', Line, E}, State1};
