@@ -1,0 +1,264 @@
+%%% ==========================================================================
+%%% Weaverl is a parse transformation that enables Aspect-Oriented
+%%% Programing (AOP) in Erlang.
+%%%
+%%% Aspect-oriented programming is a way of modularizing crosscutting
+%%% concerns. Weaverl is an implementation of aspect-oriented programming
+%%% for Erlang.
+%%%
+%%% At its core, aspect-oriented programming relies on the Joint Point Model
+%%% (JPM). A JPM consists of three elements:
+%%%
+%%%     * Join point: Point in a running program where additional behaviour
+%%%       can be usefully joined (e.g. a function call).
+%%%
+%%%     * Pointcut: Means of identifying join points. A pointcut determines
+%%%       whether a join point matches (e.g. MFA, all functions within a
+%%%       module, etc.).
+%%%
+%%%     * Advice: Means of specifying code to run at a join point. An
+%%%       advice can run before, after and around a join point.
+%%%
+%%% An aspect is the modularisation of a crosscutting concern.
+%%%
+%%%
+%%% Functions used within advices need to comply to the following rules:
+%%%
+%%%     * Functions used in 'before' advices MUST be of the same arity as the
+%%%       adviced function. These functions will be called using the same
+%%%       arguments as the adviced function. Note that these functions are
+%%%       always executed before the adviced functions get executed.
+%%%
+%%%     * Functions used in 'after_returning' advices MUST be of arity one.
+%%%       The result of calling the adviced function will be used as the only
+%%%       argument when calling these functions. Note that these functions will
+%%%       only be called if the adviced functions returns normally.
+%%%
+%%%     * Functions used in 'after_throwing' advices MUST be of arity one. The
+%%%       exception or error thrown when calling the adviced function will be used
+%%%       as the only argument when calling these functions.
+%%%
+%%%     * Functions used in 'around' adives MUST be of arity three. These functions
+%%%       are called instead of the adviced function. The arguments of these
+%%%       functions are the module, function and arguments of the adviced function.
+%%%
+%%%
+%%% Weaverl's AOP functionality is provided by means of a parse transformation.
+%%% Aspects are specified as an Erlang compiler option using the 'weaverl_aspects'
+%%% key.
+%%%
+%%%     erlc -o ebin +{weaverl_aspects, Aspects} src/foo.erl
+%%%
+%%%
+%%% TL;DR
+%%% Weaverl provides a means of altering the behaviour of an Erlang
+%%% application without requiring the manual modification of the target
+%%% modules and functions.
+%%%
+%%%
+%%% Author: Enrique Fernandez <efcasado@gmail.com>
+%%% Creation date: April, 2014
+%%% ==========================================================================
+-module(weaverl).
+
+%% TODO:
+%%     #1 - How to handle functions declared in header files?
+%%     #2 - Run-time evaluation of meta-calls.
+%%     #3 - Read imported functions.
+%%     #4 - Get MFA of all functions declared in a module.
+%%     #5 - Implement a user-friendly mechanism for specifying advices and
+%%          pointcuts.
+
+-export([parse_transform/2]).
+
+
+
+%% Weaverl's parse transformation.
+-spec parse_transform(list(), list()) -> list().
+parse_transform(Forms, Opts) ->
+    ModuleName = read_module_name(Forms),
+    apply_aspects(get_aspects(ModuleName, Opts), Forms).
+
+
+%% Returns a list of all defined aspects, in their canonical form.
+-spec get_aspects(string(), list()) -> list().
+get_aspects(ModuleName, Opts) ->
+    UserProvidedAspects = proplists:get_value(weaverl_aspects, Opts, []),
+    CanonisedAspects = canonise_aspects(UserProvidedAspects),
+    %% Filter out aspects not applicable to this module.
+    filter_aspects(ModuleName, CanonisedAspects).
+
+%% Converts a list of aspects to their canonical form.
+canonise_aspects(Aspects) ->
+    [ canonise_aspect(A) || A <- Aspects ].
+
+%% Converts an aspect to its canonical form.
+%% Aspect -> {Pointcut, Advice} -> {{M,F,A}, {Type, {M,F}}}
+canonise_aspect(Aspect = {_PcMFA = {_,_,_}, {_AdvType, _AdvMF = {_,_}}}) ->
+    Aspect.
+
+%% Filters out aspects not applicable to this module.
+filter_aspects(ModuleName, Aspects) ->
+    %% TODO: Implement filtering
+    Aspects.
+
+
+apply_aspects(Aspects, Forms) ->
+    lists:foldl(
+      fun(Aspect = {Pointcut, Advice}, UpdatedForms) ->
+              unclutter(map(fun(Form = {call, _L, _F, _Args}) ->
+                                    case is_weaveable(Form, Aspect) of
+                                        true ->
+                                            weave(Form, Advice);
+                                        false ->
+                                            Form
+                                    end;
+                               (OtherForm) ->
+                                    OtherForm
+                            end,
+                            UpdatedForms))
+      end,
+      Forms,
+      Aspects).
+
+%% Convert all weaverl_call pseudo-forms to proper call forms. weaverl_call
+%% pseudo-forms are used to avoid infinite loops when weaving forms.
+unclutter(Forms) ->
+    map(fun({weaverl_call, L, F, Args}) ->
+                {call, L, F, Args};
+           (OtherForm) ->
+                OtherForm
+        end,
+        Forms).
+
+
+is_weaveable({call,L,{atom,_,F},Args}, Aspects) ->
+    %% TODO: Get name of all functions defined in this module.
+    %% TODO: Get name of all included functions.
+    false;
+is_weaveable({call,L,{remote,_,{atom,_,erlang},{atom,_,apply}},
+              [{atom,_,M},{atom,_,F},Args]},
+             Aspects) ->
+    is_weaveable_(atom_to_list(M), atom_to_list(F), cons_length(Args), Aspects);
+is_weaveable({call,L,{remote,_,{atom,_,M},{atom,_,F}},Args}, Aspects) ->
+    is_weaveable_(atom_to_list(M), atom_to_list(F), length(Args), Aspects);
+is_weaveable(_OtherCall, _Aspects) ->
+    false.
+
+
+is_weaveable_(M, F, A, {{PcM, PcF, PcA}, Advice}) ->
+    is_match([M, F, A], [PcM, PcF, PcA]).
+
+is_match([], []) ->
+    true;
+is_match([S| Subjects], [RE| REs])
+  when is_list(S) andalso is_list(RE) ->
+    case re:run(S, RE) of
+        nomatch ->
+            false;
+        _Other ->
+            is_match(Subjects, REs)
+    end;
+is_match([X| Xs], [Y| Ys]) ->
+    case X == Y of
+        false ->
+            false;
+        true ->
+            is_match(Xs, Ys)
+    end.
+
+%% Alters the captured function's behaviour according to the specified advice.
+%%
+%% Weaved function calls use the 'weaverl_call' pseudo-form to avoid infinite
+%% loops.
+weave({call, L, Pc, Args}, {before, {M, F}}) ->
+    {weaverl_call, L, Pc,
+     [{weaver_call, L, {remote, L, {atom, L, M}, {atom, L, F}}, Args}]};
+weave({call, L, _Pc, Args}, {around, {M, F}}) ->
+    {weaverl_call, L, {remote, L, {atom, L, M}, {atom, L, F}}, Args};
+weave({call, L, Pc, Args}, {after_returning, {M, F}}) ->
+    {weaverl_call, L, {remote, L, {atom, L, M}, {atom, L, F}},
+     [{weaverl_call, L, Pc, Args}]};
+weave({call, L, Pc, Args}, {after_throwing, {M, F}}) ->
+    {'try', L,
+     [{weaverl_call, L, Pc, Args}],
+     [],
+     [{clause, L,
+       [{tuple, L, [{var, L, 'C'}, {var, L, 'E'}, {var, L, '_'}]}],
+       [],
+       [{weaverl_call, L, {remote, L, {atom, L, M}, {atom, L, F}},
+         [{var, L, 'C'}, {var, L, 'E'}]}]}]}.
+
+
+
+%% =========================================
+%%  Helper functions for manipulating forms
+%% =========================================
+
+
+%% Returns the name of the module being parse transformed.
+read_module_name([{attribute, L, file, {Module, L}}| _Forms]) ->
+    filename:basename(Module, ".erl").
+
+%% Returns the length of a const form.
+cons_length({cons, _, {nil, _}, {nil, _}}) ->
+    1;
+cons_length({cons, _, _H, {nil, _}}) ->
+    1;
+cons_length({cons, _, _H, Cons}) ->
+    cons_length_(Cons, 1).
+
+cons_length_({cons, _, _H, Cons}, Length) ->
+    cons_length_(Cons, Length + 1);
+cons_length_({nil, _}, Length) ->
+    Length.
+
+%% Traverses the abstract tree applying, recursively, the specified function
+%% to all and each of its forms.
+%%
+%% The user-specified function MUST return one of the following values:
+%%
+%%     * 'ok': Stop traversing the abstract tree. The form being traversed is
+%%     dropped.
+%%
+%%     * {ok, NewForm}: Stop traversing the abstract tree. The form being traversed
+%%     is replaced by NewForm and returned along with all other forms that have been
+%%     traversed up until this point.
+%%
+%%     * 'continue': The form being traversed is dropped, as well as all its childs.
+%%     Moves on to the next sibling form in the abstract tree.
+%%
+%%     * {continue, NewForm}: The form being traversed is replaced by NewForm and
+%%     its child forms are never traversed. Moves on to the next sibling form in
+%%     the abstract form.
+%%
+%%     * NewForm: The form being traversed is replaced by NewForm and it is
+%%     recursively traversed.
+%%
+map(Fun, Forms) when is_function(Fun, 1) ->
+    lists:reverse(map_(Fun, [], Forms)).
+
+map_(_Fun, Acc, []) ->
+    Acc;
+map_(Fun, Acc, [F| Forms])
+  when is_function(Fun, 1) andalso is_tuple(F) ->
+    case Fun(F) of
+        ok ->
+            Acc;
+        {ok, NewF} ->
+            [NewF| Acc];
+        continue ->
+            map_(Fun, Acc, Forms);
+        {continue, NewF} ->
+            map_(Fun, [NewF| Acc], Forms);
+        NewF ->
+            UpdatedNewF = list_to_tuple(map(Fun, tuple_to_list(NewF))),
+            map_(Fun, [UpdatedNewF| Acc], Forms)
+    end;
+map_(Fun, Acc, [F| Forms])
+  when is_function(Fun, 1) andalso is_list(F) ->
+    NewF = map(Fun, Fun(F)),
+    map_(Fun, [NewF| Acc], Forms);
+map_(Fun, Acc, [F| Forms])
+  when is_function(Fun, 1) ->
+    map_(Fun, [Fun(F)| Acc], Forms).
