@@ -64,8 +64,6 @@
 %% TODO:
 %%     #1 - How to handle functions declared in header files?
 %%     #2 - Run-time evaluation of meta-calls.
-%%     #3 - Read imported functions.
-%%     #4 - Get MFA of all functions declared in a module.
 %%     #5 - Implement a user-friendly mechanism for specifying advices and
 %%          pointcuts.
 
@@ -77,7 +75,15 @@
 -spec parse_transform(list(), list()) -> list().
 parse_transform(Forms, Opts) ->
     ModuleName = read_module_name(Forms),
-    apply_aspects(get_aspects(ModuleName, Opts), Forms).
+
+    LocallyAccessibleFunctions =
+        read_imported_functions(Forms) ++
+        read_local_functions(Forms, ModuleName) ++
+        read_included_functions(Forms, ModuleName),
+
+    apply_aspects(get_aspects(ModuleName, Opts),
+                  LocallyAccessibleFunctions,
+                  Forms).
 
 
 %% Returns a list of all defined aspects, in their canonical form.
@@ -103,20 +109,21 @@ filter_aspects(ModuleName, Aspects) ->
     Aspects.
 
 
-apply_aspects(Aspects, Forms) ->
+apply_aspects(Aspects, LocalFunctions, Forms) ->
     lists:foldl(
       fun(Aspect = {Pointcut, Advice}, UpdatedForms) ->
-              unclutter(map(fun(Form = {call, _L, _F, _Args}) ->
-                                    case is_weaveable(Form, Aspect) of
-                                        true ->
-                                            weave(Form, Advice);
-                                        false ->
-                                            Form
-                                    end;
-                               (OtherForm) ->
-                                    OtherForm
-                            end,
-                            UpdatedForms))
+              unclutter(
+                map(fun(Form = {call, _L, _F, _Args}) ->
+                            case is_weaveable(Form, Aspect, LocalFunctions) of
+                                true ->
+                                    weave(Form, Advice);
+                                false ->
+                                    Form
+                            end;
+                       (OtherForm) ->
+                            OtherForm
+                    end,
+                    UpdatedForms))
       end,
       Forms,
       Aspects).
@@ -132,19 +139,19 @@ unclutter(Forms) ->
         Forms).
 
 
-is_weaveable({call,L,{atom,_,F},Args}, Aspects) ->
-    %% TODO: Get name of all functions defined in this module.
-    %% TODO: Get name of all included functions.
-    false;
+is_weaveable({call,L,{atom,_,F}, Args}, Aspect, LocalFs) ->
+    A = length(Args),
+    M = get_module({F, A}, LocalFs),
+    is_weaveable_(M, atom_to_list(F), A, Aspect);
 is_weaveable({call,L,{remote,_,{atom,_,erlang},{atom,_,apply}},
               [{atom,_,M},{atom,_,F},Args]},
-             Aspects) ->
+             Aspects,
+             _LocalFs) ->
     is_weaveable_(atom_to_list(M), atom_to_list(F), cons_length(Args), Aspects);
-is_weaveable({call,L,{remote,_,{atom,_,M},{atom,_,F}},Args}, Aspects) ->
+is_weaveable({call,L,{remote,_,{atom,_,M},{atom,_,F}},Args}, Aspects, _LocalFs) ->
     is_weaveable_(atom_to_list(M), atom_to_list(F), length(Args), Aspects);
-is_weaveable(_OtherCall, _Aspects) ->
+is_weaveable(_OtherCall, _Aspects, _LocalFs) ->
     false.
-
 
 is_weaveable_(M, F, A, {{PcM, PcF, PcA}, Advice}) ->
     is_match([M, F, A], [PcM, PcF, PcA]).
@@ -166,6 +173,10 @@ is_match([X| Xs], [Y| Ys]) ->
         true ->
             is_match(Xs, Ys)
     end.
+
+get_module({F, A}, Functions) ->
+    proplists:get_value({F, A}, Functions).
+
 
 %% Alters the captured function's behaviour according to the specified advice.
 %%
@@ -199,6 +210,26 @@ weave({call, L, Pc, Args}, {after_throwing, {M, F}}) ->
 %% Returns the name of the module being parse transformed.
 read_module_name([{attribute, L, file, {Module, L}}| _Forms]) ->
     filename:basename(Module, ".erl").
+
+read_imported_functions(Forms) ->
+    lists:flatten(
+      map(fun({attribute, _L, import, {M, Fs}}) ->
+                  {continue, [ {{F, A}, M} || {F, A} <- Fs ]};
+             (_OtherForm) ->
+                  continue
+          end,
+          Forms)).
+
+read_local_functions(Forms, M) ->
+    map(fun({function, _L, F, A, _Clauses}) ->
+                {continue, {{F, A}, M}};
+           (_OtherForm) ->
+                continue
+        end,
+        Forms).
+
+read_included_functions(_Forms, _M) ->
+    [].
 
 %% Returns the length of a const form.
 cons_length({cons, _, {nil, _}, {nil, _}}) ->
