@@ -19,11 +19,15 @@ TEST_RULES     := $(filter %_test,$(patsubst %.erl,%,$(TEST_FILES)))
 VPATH = $(SRC_DIR) $(TEST_DIR)
 
 
-.PHONY: ebin src test build
+.PHONY: $(EBIN_DIR) $(SRC_DIR) $(TEST_DIR)
 
-build: $(BIN_FILES) build-test
+build: $(EBIN_DIR) $(BIN_FILES) build-test
 
 build-test: $(BIN_TEST_FILES)
+
+$(EBIN_DIR):
+	@[ -d $(EBIN_DIR) ] || mkdir -p $(EBIN_DIR)
+
 
 # Note! Everything is re-compiled if weaverl.erl has changed.
 # This is done to speed-up Weaverl's development. Everything in
