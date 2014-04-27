@@ -75,12 +75,10 @@
 -spec parse_transform(list(), list()) -> list().
 parse_transform(Forms, Opts) ->
     ModuleName = read_module_name(Forms),
-
     LocallyAccessibleFunctions =
         read_imported_functions(Forms) ++
         read_local_functions(Forms, ModuleName) ++
         read_included_functions(Forms, ModuleName),
-
     apply_aspects(get_aspects(ModuleName, Opts),
                   LocallyAccessibleFunctions,
                   Forms).
@@ -208,7 +206,7 @@ weave({call, L, Pc, Args}, {after_throwing, {M, F}}) ->
 
 
 %% Returns the name of the module being parse transformed.
-read_module_name([{attribute, L, file, {Module, L}}| _Forms]) ->
+read_module_name([{attribute, _L, file, {Module, _}}| _Forms]) ->
     filename:basename(Module, ".erl").
 
 read_imported_functions(Forms) ->
@@ -228,8 +226,21 @@ read_local_functions(Forms, M) ->
         end,
         Forms).
 
-read_included_functions(_Forms, _M) ->
-    [].
+read_included_functions(Forms, M) ->
+    IncludedFiles =
+        map(fun({attribute, L, file, {File, _}}) when L =/= 1 ->
+                    {continue, File};
+               (_OtherForm) ->
+                    continue
+            end,
+            Forms),
+
+    lists:foldl(
+      fun(F, Acc) ->
+              lists:append(Acc, read_local_functions(read_forms(F), M))
+      end,
+      [],
+      IncludedFiles).
 
 %% Returns the length of a const form.
 cons_length({cons, _, {nil, _}, {nil, _}}) ->
@@ -293,3 +304,13 @@ map_(Fun, Acc, [F| Forms])
 map_(Fun, Acc, [F| Forms])
   when is_function(Fun, 1) ->
     map_(Fun, [Fun(F)| Acc], Forms).
+
+
+%% Reads the Erlang forms of the specified Erlang source file.
+read_forms(File) ->
+    case epp:parse_file(File, [], []) of
+        {ok, Forms} ->
+            Forms;
+        _Error ->
+            throw({forms_not_found, File})
+    end.
