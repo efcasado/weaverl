@@ -10,4 +10,6 @@ run() ->
     io:format("Testing speaker:whisper/0~n"),
     speaker:whisper(),
     io:format("Testing speaker:meta_talk/0~n"),
-    speaker:meta_talk().
+    speaker:meta_talk(),
+    io:format("Testing speaker:coerced_talk/0~n"),
+    speaker:coerced_talk().

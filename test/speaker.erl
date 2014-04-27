@@ -9,7 +9,6 @@
 -export([choose_saying/1]).
 
 
-
 -define(SAYINGS,
         [
          "A bad penny always turns up",
@@ -23,6 +22,10 @@
         ]).
 
 -define(DEFAULT_NSAYINGS, 3).
+
+
+%% Includes the coerced_talk/0 function.
+-include("speaker.hrl").
 
 
 
