@@ -173,7 +173,7 @@ is_match([X| Xs], [Y| Ys]) ->
     end.
 
 get_module({F, A}, Functions) ->
-    proplists:get_value({F, A}, Functions).
+    proplists:get_value({F, A}, Functions, erlang).
 
 
 %% Alters the captured function's behaviour according to the specified advice.
