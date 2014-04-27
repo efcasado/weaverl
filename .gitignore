@@ -1,4 +1,5 @@
 *.beam
+*.dump
 .eunit
 ebin
 *DS_Store
