@@ -97,19 +97,22 @@ canonise_aspects(Aspects) ->
     [ canonise_aspect(A) || A <- Aspects ].
 
 %% Converts an aspect to its canonical form.
-%% Aspect -> {Pointcut, Advice} -> {{M,F,A}, {Type, {M,F}}}
-canonise_aspect(Aspect = {_PcMFA = {_,_,_}, {_AdvType, _AdvMF = {_,_}}}) ->
+%% Aspect -> {Pointcut, Advice} -> {{M,F,A}, {Type, {M,F}}, Within}
+canonise_aspect({Pointcut = {_,_,_}, Advice = {_AdvType, _AdvMF = {_,_}}}) ->
+    {Pointcut, Advice, ".*"};
+canonise_aspect(Aspect = {_PcMFA = {_,_,_}, {_AdvType, _AdvMF = {_,_}}, _Within}) ->
     Aspect.
+
 
 %% Filters out aspects not applicable to this module.
 filter_aspects(ModuleName, Aspects) ->
-    %% TODO: Implement filtering
-    Aspects.
+    [ A || A = {_Pc, _Adv, Within} <- Aspects,
+           re:run(ModuleName, Within) =/= nomatch ].
 
 
 apply_aspects(Aspects, LocalFunctions, Forms) ->
     lists:foldl(
-      fun(Aspect = {Pointcut, Advice}, UpdatedForms) ->
+      fun(Aspect = {_Pointcut, Advice, _Within}, UpdatedForms) ->
               unclutter(
                 map(fun(Form = {call, _L, _F, _Args}) ->
                             case is_weaveable(Form, Aspect, LocalFunctions) of
@@ -137,21 +140,21 @@ unclutter(Forms) ->
         Forms).
 
 
-is_weaveable({call,L,{atom,_,F}, Args}, Aspect, LocalFs) ->
+is_weaveable({call,_L,{atom,_,F}, Args}, Aspect, LocalFs) ->
     A = length(Args),
     M = get_module({F, A}, LocalFs),
     is_weaveable_(M, atom_to_list(F), A, Aspect);
-is_weaveable({call,L,{remote,_,{atom,_,erlang},{atom,_,apply}},
+is_weaveable({call,_L,{remote,_,{atom,_,erlang},{atom,_,apply}},
               [{atom,_,M},{atom,_,F},Args]},
              Aspects,
              _LocalFs) ->
     is_weaveable_(atom_to_list(M), atom_to_list(F), cons_length(Args), Aspects);
-is_weaveable({call,L,{remote,_,{atom,_,M},{atom,_,F}},Args}, Aspects, _LocalFs) ->
+is_weaveable({call,_L,{remote,_,{atom,_,M},{atom,_,F}},Args}, Aspects, _LocalFs) ->
     is_weaveable_(atom_to_list(M), atom_to_list(F), length(Args), Aspects);
 is_weaveable(_OtherCall, _Aspects, _LocalFs) ->
     false.
 
-is_weaveable_(M, F, A, {{PcM, PcF, PcA}, Advice}) ->
+is_weaveable_(M, F, A, {{PcM, PcF, PcA}, _Advice, _Within}) ->
     is_match([M, F, A], [PcM, PcF, PcA]).
 
 is_match([], []) ->
