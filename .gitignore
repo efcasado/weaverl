@@ -1,6 +1,8 @@
 *.beam
 *.dump
-.eunit
-ebin
 *DS_Store
 *~
+
+.eunit
+ebin
+deps

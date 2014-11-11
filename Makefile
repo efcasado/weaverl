@@ -1,8 +1,10 @@
 # Author: Enrique Fernandez <efcasado@gmail.com>
 
+REBAR          := $(shell which rebar || ./rebar)
+
 ERL            := $(shell which erl)
 ERLC           := $(shell which erlc)
-ERLC_OPTS      := -pz ebin "+{weaverl_aspects, [{{\"speaker\", \"choose_saying\", 1}, {after_returning, {censor, censor}}}]}"
+ERLC_OPTS      := -pa deps/*/ebin -pz ebin "+{weaverl_aspects, [{{\"speaker\", \"choose_saying\", 1}, {after_returning, {censor, censor}}}]}"
 
 SRC_DIR        := src
 EBIN_DIR       := ebin
@@ -19,9 +21,12 @@ TEST_RULES     := $(filter %_test,$(patsubst %.erl,%,$(TEST_FILES)))
 VPATH = $(SRC_DIR) $(TEST_DIR)
 
 
-.PHONY: $(EBIN_DIR) $(SRC_DIR) $(TEST_DIR)
+.PHONY: $(EBIN_DIR) $(SRC_DIR) $(TEST_DIR) deps
 
-build: $(EBIN_DIR) $(BIN_FILES) build-test
+build: deps $(EBIN_DIR) $(BIN_FILES) build-test
+
+deps:
+	$(REBAR) get-deps compile
 
 build-test: $(BIN_TEST_FILES)
 

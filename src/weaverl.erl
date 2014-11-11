@@ -114,17 +114,18 @@ apply_aspects(Aspects, LocalFunctions, Forms) ->
     lists:foldl(
       fun(Aspect = {_Pointcut, Advice, _Within}, UpdatedForms) ->
               unclutter(
-                map(fun(Form = {call, _L, _F, _Args}) ->
-                            case is_weaveable(Form, Aspect, LocalFunctions) of
-                                true ->
-                                    weave(Form, Advice);
-                                false ->
-                                    Form
-                            end;
-                       (OtherForm) ->
-                            OtherForm
-                    end,
-                    UpdatedForms))
+                forms:map(
+                  fun(Form = {call, _L, _F, _Args}) ->
+                          case is_weaveable(Form, Aspect, LocalFunctions) of
+                              true ->
+                                  weave(Form, Advice);
+                              false ->
+                                  Form
+                          end;
+                     (OtherForm) ->
+                          OtherForm
+                  end,
+                  UpdatedForms))
       end,
       Forms,
       Aspects).
@@ -132,12 +133,13 @@ apply_aspects(Aspects, LocalFunctions, Forms) ->
 %% Convert all weaverl_call pseudo-forms to proper call forms. weaverl_call
 %% pseudo-forms are used to avoid infinite loops when weaving forms.
 unclutter(Forms) ->
-    map(fun({weaverl_call, L, F, Args}) ->
-                {call, L, F, Args};
-           (OtherForm) ->
-                OtherForm
-        end,
-        Forms).
+    forms:map(
+      fun({weaverl_call, L, F, Args}) ->
+              {call, L, F, Args};
+         (OtherForm) ->
+              OtherForm
+      end,
+      Forms).
 
 
 is_weaveable({call,_L,{atom,_,F}, Args}, Aspect, LocalFs) ->
@@ -214,29 +216,35 @@ read_module_name([{attribute, _L, file, {Module, _}}| _Forms]) ->
 
 read_imported_functions(Forms) ->
     lists:flatten(
-      map(fun({attribute, _L, import, {M, Fs}}) ->
-                  {continue, [ {{F, A}, M} || {F, A} <- Fs ]};
-             (_OtherForm) ->
-                  continue
-          end,
-          Forms)).
+      forms:reduce(
+        fun({attribute, _L, import, {M, Fs}}, Acc) ->
+                [[ {{F, A}, M} || {F, A} <- Fs ]| Acc];
+           (_OtherForm, Acc) ->
+                Acc
+        end,
+        [],
+        Forms)).
 
 read_local_functions(Forms, M) ->
-    map(fun({function, _L, F, A, _Clauses}) ->
-                {continue, {{F, A}, M}};
-           (_OtherForm) ->
-                continue
-        end,
-        Forms).
+    forms:reduce(
+      fun({function, _L, F, A, _Clauses}, Acc) ->
+              [{{F, A}, M}| Acc];
+         (_OtherForm, Acc) ->
+              Acc
+      end,
+      [],
+      Forms).
 
 read_included_functions(Forms, M) ->
     IncludedFiles =
-        map(fun({attribute, L, file, {File, _}}) when L =/= 1 ->
-                    {continue, File};
-               (_OtherForm) ->
-                    continue
-            end,
-            Forms),
+        forms:reduce(
+          fun({attribute, L, file, {File, _}}, Acc) when L =/= 1 ->
+                  [File| Acc];
+             (_OtherForm, Acc) ->
+                  Acc
+          end,
+          [],
+          Forms),
 
     lists:foldl(
       fun(F, Acc) ->
@@ -257,57 +265,6 @@ cons_length_({cons, _, _H, Cons}, Length) ->
     cons_length_(Cons, Length + 1);
 cons_length_({nil, _}, Length) ->
     Length.
-
-%% Traverses the abstract tree applying, recursively, the specified function
-%% to all and each of its forms.
-%%
-%% The user-specified function MUST return one of the following values:
-%%
-%%     * 'ok': Stop traversing the abstract tree. The form being traversed is
-%%     dropped.
-%%
-%%     * {ok, NewForm}: Stop traversing the abstract tree. The form being traversed
-%%     is replaced by NewForm and returned along with all other forms that have been
-%%     traversed up until this point.
-%%
-%%     * 'continue': The form being traversed is dropped, as well as all its childs.
-%%     Moves on to the next sibling form in the abstract tree.
-%%
-%%     * {continue, NewForm}: The form being traversed is replaced by NewForm and
-%%     its child forms are never traversed. Moves on to the next sibling form in
-%%     the abstract form.
-%%
-%%     * NewForm: The form being traversed is replaced by NewForm and it is
-%%     recursively traversed.
-%%
-map(Fun, Forms) when is_function(Fun, 1) ->
-    lists:reverse(map_(Fun, [], Forms)).
-
-map_(_Fun, Acc, []) ->
-    Acc;
-map_(Fun, Acc, [F| Forms])
-  when is_function(Fun, 1) andalso is_tuple(F) ->
-    case Fun(F) of
-        ok ->
-            Acc;
-        {ok, NewF} ->
-            [NewF| Acc];
-        continue ->
-            map_(Fun, Acc, Forms);
-        {continue, NewF} ->
-            map_(Fun, [NewF| Acc], Forms);
-        NewF ->
-            UpdatedNewF = list_to_tuple(map(Fun, tuple_to_list(NewF))),
-            map_(Fun, [UpdatedNewF| Acc], Forms)
-    end;
-map_(Fun, Acc, [F| Forms])
-  when is_function(Fun, 1) andalso is_list(F) ->
-    NewF = map(Fun, Fun(F)),
-    map_(Fun, [NewF| Acc], Forms);
-map_(Fun, Acc, [F| Forms])
-  when is_function(Fun, 1) ->
-    map_(Fun, [Fun(F)| Acc], Forms).
-
 
 %% Reads the Erlang forms of the specified Erlang source file.
 read_forms(File) ->
